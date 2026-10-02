@@ -39,19 +39,44 @@ Mirrors approved Appy applications to a Discord Forum channel.
 
 ## Run 24/7 with PC off (free)
 
-Truth: no host is 100% "free forever, no limits". Closest options:
+### Option A — GitHub Actions (recommended, already configured)
 
-### Option A — Oracle Cloud Always Free (only true free-forever VPS)
+`.github/workflows/bot.yml` runs the bot in near-continuous 45-min sessions
+(queued next session starts seconds later, no meaningful gaps). Runs are
+**free forever on this public repo** (keep it public — private repos get only
+2,000 min/month). Dedupe state (`data/seen.json`) is committed back to the repo
+after each post, and every session catches up on approvals from its restart gap.
+
+1. GitHub → **Settings → Secrets and variables → Actions → New secret**:
+   - Name: `DISCORD_TOKEN`, Value: your bot token
+2. **Actions** tab → **Appy Forum Bot** → **Run workflow** → main → Run
+   (schedule `*/5 * * * *` keeps it going automatically)
+3. First run logs `[baseline] N existing approved log(s) marked seen (not posted)` —
+   old approvals are ignored on purpose; only new approvals post.
+4. Test: approve an application → forum post appears (same session or next, ≤5 min).
+
+If GitHub auto-disables the schedule after long inactivity, re-enable it in the
+Actions tab (the workflow has a self-heartbeat guard to prevent this).
+
+### Option B — HAX.co.id VPS (pm2)
+1. Panel → **Web Base Terminal**, paste:
+   ```bash
+   bash setup.sh https://github.com/Kazorashi/Application
+   ```
+2. If asked, `nano .env` → fill `DISCORD_TOKEN` → `pm2 start src/index.js --name appy-forum && pm2 save`
+3. Remember to **Extend VPS** in the panel before expiry. On server wipes just re-run setup.sh.
+
+### Option C — Oracle Cloud Always Free (true free-forever VPS)
 1. Create Oracle Cloud free account, launch Ampere A1 VM (Ubuntu 22.04).
 2. SSH in:
    ```
    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
    sudo apt install -y nodejs git
-   git clone <your-repo-url> appy-forum-bot
+   git clone https://github.com/Kazorashi/Application appy-forum-bot
    cd appy-forum-bot
    npm ci --omit=dev
    cp .env.example .env
-   nano .env   # fill DISCORD_TOKEN + GUILD_ID
+   nano .env   # fill DISCORD_TOKEN
    sudo npm i -g pm2
    pm2 start src/index.js --name appy-forum
    pm2 startup
@@ -59,18 +84,9 @@ Truth: no host is 100% "free forever, no limits". Closest options:
    ```
    Never sleeps, free forever within Always Free limits.
 
-### Option B — Render free (easiest, 5 min)
-1. Push this folder to GitHub.
-2. Render.com > New > Blueprint > select repo (`render.yaml` is included).
-3. Fill `DISCORD_TOKEN`, `GUILD_ID` in dashboard, Deploy.
-4. Free web services sleep after inactivity — add UptimeRobot pinging `https://<your-app>.onrender.com/health` every 5 min to keep it awake. `/health` server is already built in.
+### Option D — Render free (5 min)
+1. Render.com > New > Blueprint > select repo (`render.yaml` is included).
+2. Fill `DISCORD_TOKEN` in dashboard, Deploy.
+3. Free web services sleep after inactivity — add UptimeRobot pinging `https://<your-app>.onrender.com/health` every 5 min to keep it awake. `/health` server is already built in.
 
-### Option C — Fly.io free allowance
-```
-fly launch
-fly secrets set DISCORD_TOKEN=xxx GUILD_ID=xxx LOG_CHANNEL_ID=1482835040600588328 FORUM_CHANNEL_ID=1555637461944897596 APPY_BOT_ID=853327905357561948 DEBUG_DUMP=false
-fly deploy
-```
-`fly.toml` included, `min_machines_running = 1` keeps it up.
-
-Note: free hosts wipe `data/seen.json` on restart. Safe here — bot only reacts to *new* approvals, it never re-posts history.
+Note: when hosted separately from GitHub Actions, `data/seen.json` on the server persists the dedupe state; the bot never back-fills history beyond its startup scan of the last 100 logs (old approvals are baselined, not posted).

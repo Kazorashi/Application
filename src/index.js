@@ -66,16 +66,53 @@ async function handleApproved(message, source) {
   try {
     const thread = await postToForum(client, config, parsed);
     store.mark(message.id, thread.id);
+    store.flush();
     console.log(`[posted] forum thread ${thread.id} (${thread.name}) for log ${message.id}`);
   } catch (err) {
     console.error(`[error] forum post failed for log ${message.id}:`, err.message);
   }
 }
 
-client.once(Events.ClientReady, (c) => {
+// On startup, scan the last 100 log messages:
+// - first run ever: mark already-approved as seen (baseline, no forum spam)
+// - later runs: post any approved-but-unseen ones (catches approvals while restarting)
+async function backfill() {
+  try {
+    const channel = await client.channels.fetch(config.logChannelId);
+    const msgs = await channel.messages.fetch({ limit: 100 });
+    const list = [...msgs.values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    if (!store.isInitialized()) {
+      let n = 0;
+      for (const m of list) {
+        if (isApproved(m)) {
+          store.mark(m.id, 'baseline');
+          n++;
+        }
+      }
+      store.markInitialized();
+      store.flush();
+      console.log(`[baseline] ${n} existing approved log(s) marked seen (not posted)`);
+    } else {
+      let n = 0;
+      for (const m of list) {
+        if (isApproved(m) && !store.has(m.id)) {
+          await handleApproved(m, 'backfill');
+          n++;
+        }
+      }
+      if (n === 0) console.log(`[backfill] ${list.length} recent log(s) checked, nothing to post`);
+      store.flush();
+    }
+  } catch (err) {
+    console.error('[backfill] error:', err.message);
+  }
+}
+
+client.once(Events.ClientReady, async (c) => {
   console.log(`[appy-forum-bot] Logged in as ${c.user.tag}`);
   console.log(`Watching Appy ${config.appyBotId} in #${config.logChannelId} -> forum ${config.forumChannelId}`);
   if (config.dryRun) console.log('DRY_RUN=true: will only log, not post.');
+  await backfill();
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -106,5 +143,14 @@ client.on(Events.MessageUpdate, async (oldMsg, newMsg) => {
 });
 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
+
+// Flush dedupe state before exit (Actions sends SIGINT before job timeout)
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    console.log(`\n[signal] ${sig} -> flushing state`);
+    store.flush();
+    process.exit(sig === 'SIGINT' ? 130 : 143);
+  });
+}
 
 client.login(config.token);

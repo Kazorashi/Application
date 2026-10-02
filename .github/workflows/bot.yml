@@ -1,0 +1,59 @@
+name: Appy Forum Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One run at a time; a fresh queued run starts seconds after each 45-min run
+# ends -> near-continuous listening with no meaningful gaps.
+concurrency:
+  group: appy-forum-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      # Queued runs were triggered up to 5 min ago -> sync to latest main so
+      # the bot always starts with the newest seen.json (prevents duplicates).
+      - name: Sync to latest main
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Run bot (45 min per session)
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          LOG_CHANNEL_ID: '1482835040600588328'
+          FORUM_CHANNEL_ID: '1555637461944897596'
+          APPY_BOT_ID: '853327905357561948'
+          DEBUG_DUMP: 'false'
+          DRY_RUN: 'false'
+        # SIGINT at 45 min lets the bot flush state; 124 = clean timeout.
+        run: timeout --signal=INT 2700 node src/index.js || [ $? -eq 124 ]
+
+      - name: Keep schedule alive (guards 60-day inactivity auto-disable)
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $((now - last)) -gt 3456000 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keep scheduled workflow alive"
+            git push origin HEAD:main
+          fi
