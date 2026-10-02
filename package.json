@@ -1,0 +1,18 @@
+{
+  "name": "appy-forum-bot",
+  "version": "1.0.0",
+  "description": "Mirrors approved Appy applications to a Discord Forum channel",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

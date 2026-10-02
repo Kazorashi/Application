@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: appy-forum-bot
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: LOG_CHANNEL_ID
+        value: 1482835040600588328
+      - key: FORUM_CHANNEL_ID
+        value: 1555637461944897596
+      - key: APPY_BOT_ID
+        value: 853327905357561948
+      - key: DEBUG_DUMP
+        value: false
+      - key: DRY_RUN
+        value: false
