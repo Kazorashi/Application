@@ -16,13 +16,15 @@ function blobFromMessage(message) {
   return chunks.join('\n').replace(/\r/g, '').trim();
 }
 
+// Appy real format: "### **3.** Gender" (markdown) — also plain "3. Gender"
+const SECTION_RE = /^(?:#+\s*)?(?:\*\*)?\s*(\d+)\.\s*(?:\*\*)?\s*/;
+
 function splitSections(blob) {
-  // Split on lines starting with "N. " (Appy format: "3. Gender")
   const lines = blob.split('\n');
   const sections = [];
   let current = null;
   for (const line of lines) {
-    if (/^\s*\d+\.\s+/.test(line)) {
+    if (SECTION_RE.test(line)) {
       if (current) sections.push(current);
       current = line;
     } else if (current == null) {
@@ -43,16 +45,17 @@ function sectionAnswer(section) {
 }
 
 function classifySection(section) {
-  const head = section.split('\n')[0].toLowerCase();
-  const numMatch = head.match(/^\s*(\d+)\./);
+  const head = section.split('\n')[0];
+  const numMatch = head.match(SECTION_RE);
   const num = numMatch ? parseInt(numMatch[1], 10) : null;
-  if (num >= 2 && num <= 8) return num;
-  if (head.includes('gender')) return 3;
-  if (head.includes('backstory')) return 4;
-  if (head.includes('hobbi') || head.includes('skill')) return 5;
-  if (head.includes('like') || head.includes('dislike')) return 6;
-  if (head.includes('life goal')) return 7;
-  if (head.includes('name') && head.includes('oc')) return 2;
+  if (num !== null && num >= 2 && num <= 8) return num;
+  const h = head.toLowerCase();
+  if (h.includes('gender')) return 3;
+  if (h.includes('backstory')) return 4;
+  if (h.includes('hobbi') || h.includes('skill')) return 5;
+  if (h.includes('like') || h.includes('dislike')) return 6;
+  if (h.includes('life goal')) return 7;
+  if (h.includes('name') && h.includes('oc')) return 2;
   return null;
 }
 

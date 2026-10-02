@@ -36,26 +36,28 @@ function embedToText(embed) {
   return parts.join('\n');
 }
 
+// Detection for Appy approvals.
+// Real log shape (verified from live dumps):
+//   pending: content = role ping, embed color red (16757375)
+//   approved: content = "<@user>'s submission has been accepted successfully by <@staff>",
+//             embed color green (8972168 = 0x88E788), permanent.
+// Rule: approval word ("accepted"/"approved") in content or embed AND green embed.
+
 function isApproved(message) {
   if (!message) return false;
   const content = message.content || '';
   const embeds = message.embeds || [];
-
-  const contentApproved = /approv/i.test(content);
   const embedText = embeds.map(embedToText).join('\n');
-  const embedApproved = /approv/i.test(embedText);
-  const embedDenied = /deni|declin|reject/i.test(embedText) || /deni|declin|reject/i.test(content);
-  const embedGreen = embeds.some((e) => isGreen(e.color));
 
-  // Denied without any approval marker -> never approved
-  if (embedDenied && !embedApproved && !contentApproved) return false;
+  const approvedWord = /approv|accept/i;
+  const hasApprovalText = approvedWord.test(content) || approvedWord.test(embedText);
+  if (!hasApprovalText) return false;
 
-  // Primary case from user: "Approved" above message (content) -> approved
-  if (contentApproved) return true;
-  // Secondary: green embed containing Approved
-  if (embedApproved && embedGreen) return true;
-  // Tertiary: green embed + approved only in content-less edit edge (already covered)
-  return false;
+  // Green confirms the approval state; without it a pending application
+  // whose answers contain "accept/approve" cannot false-positive.
+  if (embeds.length > 0 && !embeds.some((e) => isGreen(e.color))) return false;
+
+  return true;
 }
 
 function wasApproved(oldMessage) {
