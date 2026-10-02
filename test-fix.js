@@ -75,11 +75,19 @@ check('no Q1/Q8 leak into fields', !p.backstory.includes('roleplay') && !p.goals
 
 const post = buildPostText(p);
 console.log('--- post text preview ---\n' + post + '\n-------------------------');
-check('post is plain text (no embed builder needed)', typeof post === 'string');
-check('post has 5 labels', ['Gender: ', 'Backstory: ', 'Hobbies/Skills: ', 'Likes/Dislikes: ', 'Life Goals: '].every((l) => post.includes(l)));
+check('post is plain text', typeof post === 'string');
+check('post has Name block', post.includes('**Name**\nCuckorashi'));
+check('post has 6 bold category headers', ['**Gender**', '**Backstory**', '**Hobbies/Skills**', '**Likes/Dislikes**', '**Life Goals**'].every((l) => post.includes(l)));
+check('values on line after label', post.includes('**Gender**\nCuck') && post.includes('**Life Goals**\nCuck more'));
+check('blank line between categories', post.includes('Cuck\n\n**Backstory**') && post.includes('Cukcoll\n\n**Hobbies/Skills**'));
 check('post has no log link', !post.includes('discord.com') && !post.includes('Log:'));
 check('post has no "approved" wording', !/approv/i.test(post));
 check('post within 2000 chars', post.length <= 2000);
+
+// overflow safety: huge answers must still fit and keep structure
+const huge = buildPostText({ ...p, backstory: 'x'.repeat(900), hobbies: 'y'.repeat(900), likes: 'z'.repeat(900), goals: 'w'.repeat(900) });
+check('huge answers capped at 2000', huge.length <= 2000);
+check('huge still has all headers', ['**Gender**', '**Backstory**', '**Hobbies/Skills**', '**Likes/Dislikes**', '**Life Goals**'].every((l) => huge.includes(l)));
 
 console.log(fails === 0 ? '\nALL TESTS PASSED' : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
