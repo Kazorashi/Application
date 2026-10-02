@@ -1,4 +1,4 @@
-const { ChannelType, EmbedBuilder } = require('discord.js');
+const { ChannelType } = require('discord.js');
 
 function sanitizeThreadName(name) {
   let n = String(name || 'Unknown').replace(/[\n\r\t]+/g, ' ').trim();
@@ -6,19 +6,23 @@ function sanitizeThreadName(name) {
   return n.slice(0, 100);
 }
 
-function buildForumEmbed(parsed) {
-  return new EmbedBuilder()
-    .setTitle(parsed.ocName)
-    .setColor(0x57f287)
-    .addFields(
-      { name: 'Gender', value: parsed.gender.slice(0, 1024) || '—' },
-      { name: 'Backstory', value: parsed.backstory.slice(0, 1024) || '—' },
-      { name: 'Hobbies/Skills', value: parsed.hobbies.slice(0, 1024) || '—' },
-      { name: 'Likes/Dislikes', value: parsed.likes.slice(0, 1024) || '—' },
-      { name: 'Life Goals', value: parsed.goals.slice(0, 1024) || '—' },
-    )
-    .setFooter({ text: `Approved • log ${parsed.logMessageId}` })
-    .setTimestamp(parsed.createdAt);
+// Plain-text post: OC name is the thread title, body = the 5 fields only.
+// No embed, no log link, no status wording.
+function buildPostText(parsed) {
+  const lines = [];
+  if (parsed.applicantMention) {
+    lines.push(parsed.applicantMention, '');
+  }
+  lines.push(
+    `Gender: ${parsed.gender}`,
+    `Backstory: ${parsed.backstory}`,
+    `Hobbies/Skills: ${parsed.hobbies}`,
+    `Likes/Dislikes: ${parsed.likes}`,
+    `Life Goals: ${parsed.goals}`
+  );
+  let text = lines.join('\n');
+  if (text.length > 2000) text = text.slice(0, 1997) + '...';
+  return text;
 }
 
 async function postToForum(client, config, parsed) {
@@ -27,19 +31,15 @@ async function postToForum(client, config, parsed) {
     throw new Error(`FORUM_CHANNEL_ID ${config.forumChannelId} is not a Forum channel (type=${forum?.type}).`);
   }
 
-  const threadName = sanitizeThreadName(parsed.ocName);
-  const embed = buildForumEmbed(parsed);
-  const starter = `${parsed.applicantMention ? parsed.applicantMention + '\n' : ''}Approved application for **${parsed.ocName}**.\nLog: ${parsed.logUrl}`;
-
   const options = {
-    name: threadName,
+    name: sanitizeThreadName(parsed.ocName),
     autoArchiveDuration: 10080,
-    message: { content: starter.slice(0, 2000), embeds: [embed] },
-    reason: `Appy approved log ${parsed.logMessageId}`,
+    message: { content: buildPostText(parsed) },
+    reason: `Mirror Appy log ${parsed.logMessageId}`,
   };
   if (config.approvedTagId) options.appliedTags = [config.approvedTagId];
 
   return forum.threads.create(options);
 }
 
-module.exports = { buildForumEmbed, postToForum, sanitizeThreadName };
+module.exports = { buildPostText, postToForum, sanitizeThreadName };

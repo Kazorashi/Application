@@ -1,5 +1,6 @@
 const { isApproved, wasApproved } = require('./src/utils/detect');
 const { parseApplication } = require('./src/utils/parse');
+const { buildPostText } = require('./src/utils/forum');
 
 const stats =
   'UserId: `709446568172060675`\nUsername: `saperan.`\nUser: <@709446568172060675>\nDuration: `49s`\nJoined guild <t:1772739205:R>\nSubmitted: <t:1790970191:R>';
@@ -71,6 +72,14 @@ check('likes = loves Cucks (' + p.likes + ')', p.likes === 'loves Cucks');
 check('goals = Cuck more (' + p.goals + ')', p.goals === 'Cuck more');
 check('applicant = 709446568172060675', p.applicantId === '709446568172060675');
 check('no Q1/Q8 leak into fields', !p.backstory.includes('roleplay') && !p.goals.includes('CUCK'));
+
+const post = buildPostText(p);
+console.log('--- post text preview ---\n' + post + '\n-------------------------');
+check('post is plain text (no embed builder needed)', typeof post === 'string');
+check('post has 5 labels', ['Gender: ', 'Backstory: ', 'Hobbies/Skills: ', 'Likes/Dislikes: ', 'Life Goals: '].every((l) => post.includes(l)));
+check('post has no log link', !post.includes('discord.com') && !post.includes('Log:'));
+check('post has no "approved" wording', !/approv/i.test(post));
+check('post within 2000 chars', post.length <= 2000);
 
 console.log(fails === 0 ? '\nALL TESTS PASSED' : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
