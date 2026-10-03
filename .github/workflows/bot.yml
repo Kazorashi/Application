@@ -4,12 +4,18 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+  # Chain trigger: every completed session starts the next one immediately.
+  # GitHub's schedule alone proved unreliable (runs 4-5h apart), this keeps
+  # the bot effectively always online. Stop it via Actions -> Disable workflow.
+  workflow_run:
+    workflows: ["Appy Forum Bot"]
+    types: [completed]
 
 permissions:
   contents: write
 
-# One run at a time; a fresh queued run starts seconds after each 45-min run
-# ends -> near-continuous listening with no meaningful gaps.
+# One run at a time; the next run (workflow_run chain or schedule) starts
+# within seconds of each 45-min session ending -> near-continuous listening.
 concurrency:
   group: appy-forum-bot
   cancel-in-progress: false
