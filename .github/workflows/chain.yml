@@ -1,0 +1,26 @@
+name: Appy Chain
+
+# Starts the next bot session as soon as the previous one completes.
+# (A workflow cannot listen to itself, so the chain lives in this file.)
+# Schedule is a fallback dispatcher in case a chain dispatch fails.
+# Stop everything: Actions -> disable BOTH "Appy Forum Bot" and "Appy Chain".
+
+on:
+  workflow_run:
+    workflows: ["Appy Forum Bot"]
+    types: [completed]
+  schedule:
+    - cron: '10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  start-next-session:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch next bot session
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run bot.yml --repo "${{ github.repository }}" --ref main
