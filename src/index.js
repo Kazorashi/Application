@@ -55,6 +55,16 @@ async function handleApproved(message, source) {
     console.log(`[skip] already posted log ${message.id}`);
     return;
   }
+
+  // Sync state from the repo BEFORE deciding: another instance (local or
+  // Actions) may have already posted this approval minutes ago.
+  store.flush(); // push local marks first so pull can't conflict
+  store.syncPull();
+  if (store.has(message.id)) {
+    console.log(`[skip] log ${message.id} already posted by another session`);
+    return;
+  }
+
   const parsed = parseApplication(message);
   console.log(`[approved:${source}] log=${message.id} oc=${parsed.ocName}`);
 
@@ -63,12 +73,20 @@ async function handleApproved(message, source) {
     return;
   }
 
+  // Claim BEFORE awaiting the forum post so the live event and the startup
+  // backfill can never both post the same application.
+  store.mark(message.id, 'posting');
   try {
-    const thread = await postToForum(client, config, parsed);
+    const { thread, created } = await postToForum(client, config, parsed);
     store.mark(message.id, thread.id);
     store.flush();
-    console.log(`[posted] forum thread ${thread.id} (${thread.name}) for log ${message.id}`);
+    if (created) {
+      console.log(`[posted] forum thread ${thread.id} (${thread.name}) for log ${message.id}`);
+    } else {
+      console.log(`[deduped] identical forum post already existed (${thread.id}) for log ${message.id}`);
+    }
   } catch (err) {
+    store.unmark(message.id);
     console.error(`[error] forum post failed for log ${message.id}:`, err.message);
   }
 }
@@ -78,6 +96,10 @@ async function handleApproved(message, source) {
 // - later runs: post any approved-but-unseen ones (catches approvals while restarting)
 async function backfill() {
   try {
+    // Refresh from repo first: posts made by other sessions while we were down.
+    store.syncPull();
+    const stale = store.takeStaleClaims();
+    if (stale.length) console.log(`[recovery] retrying ${stale.length} interrupted post(s): ${stale.join(', ')}`);
     const channel = await client.channels.fetch(config.logChannelId);
     const msgs = await channel.messages.fetch({ limit: 100 });
     const list = [...msgs.values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));

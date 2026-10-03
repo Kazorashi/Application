@@ -89,5 +89,20 @@ const huge = buildPostText({ ...p, backstory: 'x'.repeat(900), hobbies: 'y'.repe
 check('huge answers capped at 2000', huge.length <= 2000);
 check('huge still has all headers', ['**Gender**', '**Backstory**', '**Hobbies/Skills**', '**Likes/Dislikes**', '**Life Goals**'].every((l) => huge.includes(l)));
 
+// store: claim / stale-claim recovery / persistence round-trip
+const store = require('./src/utils/store');
+store.mark('TEST_POSTING', 'posting');
+store.mark('TEST_DONE', 'thread123');
+check('claim visible before recovery', store.has('TEST_POSTING') && store.has('TEST_DONE'));
+const stale = store.takeStaleClaims();
+check('stale posting claim recovered', stale.includes('TEST_POSTING') && !store.has('TEST_POSTING'));
+check('done entry untouched by recovery', store.has('TEST_DONE'));
+store.reload();
+check('reload keeps persisted marks', store.has('TEST_DONE'));
+store.unmark('TEST_DONE');
+store.reload();
+check('unmark persists', !store.has('TEST_DONE'));
+check('no test keys left in store', !store.has('TEST_POSTING') && !store.has('TEST_DONE'));
+
 console.log(fails === 0 ? '\nALL TESTS PASSED' : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

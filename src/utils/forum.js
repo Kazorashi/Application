@@ -47,11 +47,34 @@ function buildPostText(parsed) {
   return text;
 }
 
+// Last-resort dedupe: if the forum already contains a post with identical
+// starter text (posted by any instance), return it instead of duplicating.
+async function findExistingPost(forum, parsed) {
+  const text = buildPostText(parsed);
+  const wantedName = sanitizeThreadName(parsed.ocName);
+  try {
+    const active = await forum.threads.fetchActive();
+    for (const thread of active.threads.values()) {
+      if (thread.name !== wantedName) continue;
+      const starter = await thread.fetchStarterMessage().catch(() => null);
+      if (starter && starter.content === text) return thread;
+    }
+  } catch (e) {
+    console.error('[forum] existing-post check failed:', String(e.message).slice(0, 200));
+  }
+  return null;
+}
+
+// Returns { thread, created } — created=false means an identical post already
+// existed (deduped against the forum itself).
 async function postToForum(client, config, parsed) {
   const forum = await client.channels.fetch(config.forumChannelId);
   if (!forum || forum.type !== ChannelType.GuildForum) {
     throw new Error(`FORUM_CHANNEL_ID ${config.forumChannelId} is not a Forum channel (type=${forum?.type}).`);
   }
+
+  const existing = await findExistingPost(forum, parsed);
+  if (existing) return { thread: existing, created: false };
 
   const options = {
     name: sanitizeThreadName(parsed.ocName),
@@ -61,7 +84,8 @@ async function postToForum(client, config, parsed) {
   };
   if (config.approvedTagId) options.appliedTags = [config.approvedTagId];
 
-  return forum.threads.create(options);
+  const thread = await forum.threads.create(options);
+  return { thread, created: true };
 }
 
-module.exports = { buildPostText, postToForum, sanitizeThreadName };
+module.exports = { buildPostText, findExistingPost, postToForum, sanitizeThreadName };
