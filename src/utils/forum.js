@@ -51,22 +51,27 @@ function buildPostText(parsed) {
   return text;
 }
 
-// Same-name rule: find the OLDEST active thread with this OC name.
-// A newer application with the same name edits that thread instead of
-// creating a second thread with an identical title.
+// Same-name rule: find the OLDEST thread with this OC name, active OR
+// archived. A newer application with the same name edits that thread instead
+// of creating a second thread with an identical title.
 async function findThreadByName(forum, ocName) {
   const wanted = sanitizeThreadName(ocName);
+  const nameEq = (t) => t.name === wanted || sanitizeThreadName(t.name) === wanted;
+  const matches = [];
   try {
     const active = await forum.threads.fetchActive();
-    const matches = [...active.threads.values()].filter(
-      (t) => t.name === wanted || sanitizeThreadName(t.name) === wanted
-    );
-    matches.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-    return matches[0] || null;
+    for (const t of active.threads.values()) if (nameEq(t)) matches.push(t);
   } catch (e) {
-    console.error('[forum] name lookup failed:', String(e.message).slice(0, 200));
-    return null;
+    console.error('[forum] active-threads lookup failed:', String(e.message).slice(0, 200));
   }
+  try {
+    const archived = await forum.threads.fetchArchived({ limit: 100 });
+    for (const t of archived.threads.values()) if (nameEq(t)) matches.push(t);
+  } catch (e) {
+    console.error('[forum] archived-threads lookup failed:', String(e.message).slice(0, 200));
+  }
+  matches.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  return matches[0] || null;
 }
 
 // Returns { thread, created, edited }:
@@ -82,6 +87,8 @@ async function postToForum(client, config, parsed) {
   const text = buildPostText(parsed);
   const existing = await findThreadByName(forum, parsed.ocName);
   if (existing) {
+    // Unarchive first — archived threads reject message edits.
+    if (existing.archived) await existing.setArchived(false, `Re-activated by Appy log ${parsed.logMessageId}`);
     const starter = await existing.fetchStarterMessage().catch(() => null);
     if (starter && starter.content === text) {
       return { thread: existing, created: false, edited: false };
