@@ -7,9 +7,11 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
-# One run at a time; the next run (started by chain.yml on completion, or by
-# schedule) begins within seconds of each 45-min session ending.
+# One run at a time. The "Start next session" step below dispatches the next
+# run via the API (reliable, instant) right before each session ends; chain.yml
+# and schedule remain as slow backups. Stop: disable BOTH workflows.
 concurrency:
   group: appy-forum-bot
   cancel-in-progress: false
@@ -17,7 +19,7 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --omit=dev
 
-      - name: Run bot (45 min per session)
+      - name: Run bot (5h45m per session)
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           LOG_CHANNEL_ID: '1482835040600588328'
@@ -44,8 +46,17 @@ jobs:
           APPY_BOT_ID: '853327905357561948'
           DEBUG_DUMP: 'false'
           DRY_RUN: 'false'
-        # SIGINT at 45 min lets the bot flush state; 124 = clean timeout.
-        run: timeout --signal=INT 2700 node src/index.js || [ $? -eq 124 ]
+        # SIGINT at 5h45m lets the bot flush state; 124 = clean timeout.
+        run: timeout --signal=INT 20700 node src/index.js || [ $? -eq 124 ]
+
+      # Reliable handoff: dispatch the next session via API from inside this
+      # run. GitHub's schedule/workflow_run events proved unreliable (multi-hour
+      # stalls); workflow_dispatch via GITHUB_TOKEN has been instant every time.
+      - name: Start next session
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run bot.yml --repo "${{ github.repository }}" --ref main
 
       - name: Keep schedule alive (guards 60-day inactivity auto-disable)
         run: |
