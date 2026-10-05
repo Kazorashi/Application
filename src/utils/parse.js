@@ -1,6 +1,9 @@
 // Parse Appy log embed into OC fields.
-// Keeps ONLY: Gender(3), Backstory(4), Hobbies/Skills(5), Likes/Dislikes(6), Life Goals(7)
-// Title uses Q2 NAME (OC Name).
+// Keeps ONLY: Name, Gender, Age (new), Backstory, Hobbies/Skills, Likes/Dislikes, Life Goals.
+// Classification is KEYWORD-FIRST on the question text so inserting/renumbering
+// questions (like the new Age) can never misroute another field.
+
+const LEGACY_NUM_KEY = { 2: 'name', 3: 'gender', 4: 'backstory', 5: 'hobbies', 6: 'likes', 7: 'goals' };
 
 function blobFromMessage(message) {
   const chunks = [];
@@ -24,7 +27,9 @@ function splitSections(blob) {
   const sections = [];
   let current = null;
   for (const line of lines) {
-    if (SECTION_RE.test(line)) {
+    // Start a new section on a numbered question OR on the "Submission stats"
+    // embed field, so the LAST question's answer never swallows field lines.
+    if (SECTION_RE.test(line) || line.startsWith('Submission stats')) {
       if (current) sections.push(current);
       current = line;
     } else if (current == null) {
@@ -46,17 +51,21 @@ function sectionAnswer(section) {
 
 function classifySection(section) {
   const head = section.split('\n')[0];
-  const numMatch = head.match(SECTION_RE);
-  const num = numMatch ? parseInt(numMatch[1], 10) : null;
-  if (num !== null && num >= 2 && num <= 8) return num;
   const h = head.toLowerCase();
-  if (h.includes('gender')) return 3;
-  if (h.includes('backstory')) return 4;
-  if (h.includes('hobbi') || h.includes('skill')) return 5;
-  if (h.includes('like') || h.includes('dislike')) return 6;
-  if (h.includes('life goal')) return 7;
-  if (h.includes('name') && h.includes('oc')) return 2;
+  // Keyword-first: immune to question renumbering when Appy adds fields.
+  if (h.includes('gender')) return 'gender';
+  if (h.includes('backstory')) return 'backstory';
+  if (h.includes('hobbi') || h.includes('skill')) return 'hobbies';
+  if (h.includes('like') || h.includes('dislike')) return 'likes';
+  if (h.includes('life goal')) return 'goals';
+  if (/\bage\b/.test(h) || /\bold\b/.test(h)) return 'age'; // new category, any position/number
+  if (h.includes('name') && h.includes('oc')) return 'name';
   return null;
+}
+
+function sectionNumber(section) {
+  const numMatch = section.split('\n')[0].match(SECTION_RE);
+  return numMatch ? parseInt(numMatch[1], 10) : null;
 }
 
 function cleanName(raw) {
@@ -78,26 +87,39 @@ function cleanField(raw, max = 1000) {
 function parseApplication(message) {
   const blob = blobFromMessage(message);
   const sections = splitSections(blob);
-  const byNum = {};
+  const byKey = {};
+  const unmatched = [];
   for (const s of sections) {
-    const n = classifySection(s);
-    if (n && !byNum[n]) byNum[n] = sectionAnswer(s);
+    const key = classifySection(s);
+    if (key) {
+      if (byKey[key] === undefined) byKey[key] = sectionAnswer(s);
+    } else {
+      unmatched.push(s);
+    }
+  }
+  // Legacy numbered fallback: only fills keys no keyword match claimed,
+  // so a shifted question with odd wording can never steal another field.
+  for (const s of unmatched) {
+    const k = LEGACY_NUM_KEY[sectionNumber(s)];
+    if (k && byKey[k] === undefined) byKey[k] = sectionAnswer(s);
   }
 
-  const ocName = cleanName(byNum[2] || 'Unknown');
+  const ocName = cleanName(byKey.name || 'Unknown');
   const applicantMentionMatch = blob.match(/<@!?(\d{5,25})>/);
   const applicantId = applicantMentionMatch ? applicantMentionMatch[1] : null;
 
   // Author of embed sometimes holds applicant name
   const embedAuthor = message.embeds?.[0]?.author?.name || null;
+  const age = byKey.age !== undefined && byKey.age !== '' ? cleanField(byKey.age) : '';
 
   return {
     ocName,
-    gender: cleanField(byNum[3]),
-    backstory: cleanField(byNum[4]),
-    hobbies: cleanField(byNum[5]),
-    likes: cleanField(byNum[6]),
-    goals: cleanField(byNum[7]),
+    gender: cleanField(byKey.gender),
+    age, // '' when the form has no age question (old submissions)
+    backstory: cleanField(byKey.backstory),
+    hobbies: cleanField(byKey.hobbies),
+    likes: cleanField(byKey.likes),
+    goals: cleanField(byKey.goals),
     applicantId,
     applicantMention: applicantId ? `<@${applicantId}>` : (embedAuthor || ''),
     logUrl: message.url || '',

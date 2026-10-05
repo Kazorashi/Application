@@ -6,18 +6,22 @@ function sanitizeThreadName(name) {
   return n.slice(0, 100);
 }
 
-// Plain-text post: OC name is the thread title; body = Name + 5 categories,
+// Plain-text post: OC name is the thread title; body = Name + categories,
 // each as "**Label**" line with the answer on the next line, blank line between.
-// No embed, no log link, no status wording.
+// No embed, no log link, no status wording. Age block only when parsed
+// (old submissions' form had no age question).
 function buildPostText(parsed) {
   const blocks = [
     ['Name', parsed.ocName],
     ['Gender', parsed.gender],
+  ];
+  if (parsed.age) blocks.push(['Age', parsed.age]);
+  blocks.push(
     ['Backstory', parsed.backstory],
     ['Hobbies/Skills', parsed.hobbies],
     ['Likes/Dislikes', parsed.likes],
-    ['Life Goals', parsed.goals],
-  ];
+    ['Life Goals', parsed.goals]
+  );
   const mention = parsed.applicantMention ? parsed.applicantMention + '\n\n' : '';
 
   // Keep within Discord's 2000-char limit: structure (labels + blank lines)
@@ -47,45 +51,59 @@ function buildPostText(parsed) {
   return text;
 }
 
-// Last-resort dedupe: if the forum already contains a post with identical
-// starter text (posted by any instance), return it instead of duplicating.
-async function findExistingPost(forum, parsed) {
-  const text = buildPostText(parsed);
-  const wantedName = sanitizeThreadName(parsed.ocName);
+// Same-name rule: find the OLDEST active thread with this OC name.
+// A newer application with the same name edits that thread instead of
+// creating a second thread with an identical title.
+async function findThreadByName(forum, ocName) {
+  const wanted = sanitizeThreadName(ocName);
   try {
     const active = await forum.threads.fetchActive();
-    for (const thread of active.threads.values()) {
-      if (thread.name !== wantedName) continue;
-      const starter = await thread.fetchStarterMessage().catch(() => null);
-      if (starter && starter.content === text) return thread;
-    }
+    const matches = [...active.threads.values()].filter(
+      (t) => t.name === wanted || sanitizeThreadName(t.name) === wanted
+    );
+    matches.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    return matches[0] || null;
   } catch (e) {
-    console.error('[forum] existing-post check failed:', String(e.message).slice(0, 200));
+    console.error('[forum] name lookup failed:', String(e.message).slice(0, 200));
+    return null;
   }
-  return null;
 }
 
-// Returns { thread, created } — created=false means an identical post already
-// existed (deduped against the forum itself).
+// Returns { thread, created, edited }:
+//   created=true  -> new thread
+//   edited=true   -> same-name thread existed, its post was updated in place
+//   both false    -> same-name thread existed with identical content (no-op)
 async function postToForum(client, config, parsed) {
   const forum = await client.channels.fetch(config.forumChannelId);
   if (!forum || forum.type !== ChannelType.GuildForum) {
     throw new Error(`FORUM_CHANNEL_ID ${config.forumChannelId} is not a Forum channel (type=${forum?.type}).`);
   }
 
-  const existing = await findExistingPost(forum, parsed);
-  if (existing) return { thread: existing, created: false };
+  const text = buildPostText(parsed);
+  const existing = await findThreadByName(forum, parsed.ocName);
+  if (existing) {
+    const starter = await existing.fetchStarterMessage().catch(() => null);
+    if (starter && starter.content === text) {
+      return { thread: existing, created: false, edited: false };
+    }
+    if (starter) {
+      await starter.edit({ content: text });
+      return { thread: existing, created: false, edited: true };
+    }
+    // Starter unavailable (deleted?) -> fall through and create a new one.
+    console.warn(`[forum] thread ${existing.id} has no starter message; creating a new post`);
+  }
 
   const options = {
     name: sanitizeThreadName(parsed.ocName),
     autoArchiveDuration: 10080,
-    message: { content: buildPostText(parsed) },
+    message: { content: text },
     reason: `Mirror Appy log ${parsed.logMessageId}`,
   };
   if (config.approvedTagId) options.appliedTags = [config.approvedTagId];
 
   const thread = await forum.threads.create(options);
-  return { thread, created: true };
+  return { thread, created: true, edited: false };
 }
 
-module.exports = { buildPostText, findExistingPost, postToForum, sanitizeThreadName };
+module.exports = { buildPostText, findThreadByName, postToForum, sanitizeThreadName };

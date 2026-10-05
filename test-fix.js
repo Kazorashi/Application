@@ -73,6 +73,30 @@ check('goals = Cuck more (' + p.goals + ')', p.goals === 'Cuck more');
 check('applicant = 709446568172060675', p.applicantId === '709446568172060675');
 check('no Q1/Q8 leak into fields', !p.backstory.includes('roleplay') && !p.goals.includes('CUCK'));
 
+// Age category: appended as Q9 (new form) -> parsed, shown in post
+const withAge = { ...approved, embeds: [{ ...approved.embeds[0], description: desc + '\n### **9.** Age\n17' }] };
+const pAge = parseApplication(withAge);
+check('age parsed as 17 (' + pAge.age + ')', pAge.age === '17');
+check('other fields intact with age', pAge.ocName === 'Cuckorashi' && pAge.gender === 'Cuck' && pAge.goals === 'Cuck more');
+const postAge = buildPostText(pAge);
+check('age block shown after Gender', postAge.includes('**Gender**\nCuck\n\n**Age**\n17\n\n**Backstory**'));
+
+// Age inserted as Q3 (renumbering) -> keyword-first keeps every field correct
+const renum = approved.embeds[0].description
+  .replace('### **3.** Gender', '### **3.** Age\n16\n### **4.** Gender')
+  .replace('### **4.** Backstory', '### **5.** Backstory')
+  .replace('### **5.** Hobbies/Skills', '### **6.** Hobbies/Skills')
+  .replace('### **6.** Likes/Dislikes', '### **7.** Likes/Dislikes')
+  .replace('### **7.** Life Goals', '### **8.** Life Goals')
+  .replace('### **8.** Do you', '### **9.** Do you');
+const pRen = parseApplication({ ...approved, embeds: [{ ...approved.embeds[0], description: renum }] });
+check('renumbered: age=16 (' + pRen.age + ')', pRen.age === '16');
+check('renumbered: gender still Cuck (' + pRen.gender + ')', pRen.gender === 'Cuck');
+check('renumbered: name/backstory/goals intact', pRen.ocName === 'Cuckorashi' && pRen.backstory === 'Cukcoll' && pRen.goals === 'Cuck more');
+
+// No age (old submissions) -> no Age block in post
+check('old submissions have no age block', p.age === '' && !buildPostText(p).includes('**Age**'));
+
 const post = buildPostText(p);
 console.log('--- post text preview ---\n' + post + '\n-------------------------');
 check('post is plain text', typeof post === 'string');
