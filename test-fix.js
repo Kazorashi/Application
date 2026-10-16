@@ -97,6 +97,37 @@ check('renumbered: name/backstory/goals intact', pRen.ocName === 'Cuckorashi' &&
 // No age (old submissions) -> no Age block in post
 check('old submissions have no age block', p.age === '' && !buildPostText(p).includes('**Age**'));
 
+// MC Username: appended question, and stats 'Username' line must NOT count as MC
+const withMc = { ...approved, embeds: [{ ...approved.embeds[0], description: desc + '\n### **10.** Minecraft Username\nbest_miner' }] };
+const pMc = parseApplication(withMc);
+check('MC parsed (best_miner)', pMc.mcUsername === 'best_miner');
+check('stats Username does not count as MC', p.mcUsername === '');
+check('MC block right below Name', buildPostText(pMc).includes('**Name**\nCuckorashi\n\n**MC Username**\nbest_miner\n\n**Gender**'));
+check('no MC block for old submissions', !buildPostText(p).includes('MC Username'));
+
+// Images: attachment images + embed.image + avatar thumbnail collected, deduped, PDFs skipped
+const imgMsg = {
+  ...approved,
+  attachments: new Map([
+    ['a1', { url: 'https://cdn.discordapp.com/attachments/1/a.png', proxyURL: 'https://x/1', contentType: 'image/png', name: 'a.png' }],
+    ['a2', { url: 'https://x.com/doc.pdf', proxyURL: 'https://x/2', contentType: 'application/pdf', name: 'doc.pdf' }],
+  ]),
+  embeds: [
+    {
+      ...approved.embeds[0],
+      image: { url: 'https://cdn.discordapp.com/attachments/2/b.jpg' },
+      thumbnail: { url: 'https://cdn.discordapp.com/avatars/709446568172060675/a8a07.webp?size=128' },
+    },
+  ],
+};
+const pImg = parseApplication(imgMsg);
+check('images collected (attach+embed+avatar)', JSON.stringify(pImg.images) === JSON.stringify([
+  'https://cdn.discordapp.com/attachments/1/a.png',
+  'https://cdn.discordapp.com/attachments/2/b.jpg',
+  'https://cdn.discordapp.com/avatars/709446568172060675/a8a07.webp?size=128',
+]));
+check('no attachments field -> empty images', parseApplication(approved).images.length === 0); // mock has no attachments/thumbs
+
 const post = buildPostText(p);
 console.log('--- post text preview ---\n' + post + '\n-------------------------');
 check('post is plain text', typeof post === 'string');
@@ -128,5 +159,11 @@ store.reload();
 check('unmark persists', !store.has('TEST_DONE'));
 check('no test keys left in store', !store.has('TEST_POSTING') && !store.has('TEST_DONE'));
 
-console.log(fails === 0 ? '\nALL TESTS PASSED' : `\n${fails} FAILED`);
-process.exit(fails === 0 ? 0 : 1);
+// image download: unreachable host must resolve to fallback, not crash
+(async () => {
+  const { fetchImageFiles } = require('./src/utils/forum');
+  const r = await fetchImageFiles(['https://invalid.invalid/x.png']);
+  check('failed download -> fallback list', r.files.length === 0 && r.failed.length === 1);
+  console.log(fails === 0 ? '\nALL TESTS PASSED' : `\n${fails} FAILED`);
+  process.exit(fails === 0 ? 0 : 1);
+})();

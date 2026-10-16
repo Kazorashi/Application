@@ -59,6 +59,7 @@ function classifySection(section) {
   if (h.includes('like') || h.includes('dislike')) return 'likes';
   if (h.includes('life goal')) return 'goals';
   if (/\bage\b/.test(h) || /\bold\b/.test(h)) return 'age'; // new category, any position/number
+  if (/\bmc\b/.test(h) || h.includes('minecraft') || h.includes('username') || /\bign\b/.test(h)) return 'mc';
   if (h.includes('name') && h.includes('oc')) return 'name';
   return null;
 }
@@ -82,6 +83,21 @@ function cleanField(raw, max = 1000) {
   if (!v) return '—';
   if (v.length > max) v = v.slice(0, max - 3).trimEnd() + '...';
   return v;
+}
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)(\?|$)/i;
+
+function collectImages(message) {
+  const urls = [];
+  for (const a of message.attachments?.values?.() || []) {
+    const isImage = (a.contentType || '').startsWith('image/') || IMAGE_EXT_RE.test(a.name || '') || IMAGE_EXT_RE.test(a.url || '');
+    if (isImage && a.url) urls.push(a.url);
+  }
+  for (const e of message.embeds || []) {
+    if (e.image?.url) urls.push(e.image.url);
+    if (e.thumbnail?.url) urls.push(e.thumbnail.url); // Appy: applicant avatar
+  }
+  return [...new Set(urls)];
 }
 
 function parseApplication(message) {
@@ -111,15 +127,22 @@ function parseApplication(message) {
   // Author of embed sometimes holds applicant name
   const embedAuthor = message.embeds?.[0]?.author?.name || null;
   const age = byKey.age !== undefined && byKey.age !== '' ? cleanField(byKey.age) : '';
+  const mcUsername = byKey.mc !== undefined && byKey.mc !== '' ? cleanField(byKey.mc) : '';
+
+  // Images to forward to the forum post: message attachments (images) +
+  // embed images + embed thumbnails (Appy puts the applicant avatar there).
+  const images = collectImages(message);
 
   return {
     ocName,
     gender: cleanField(byKey.gender),
     age, // '' when the form has no age question (old submissions)
+    mcUsername, // '' when the form has no MC-username question
     backstory: cleanField(byKey.backstory),
     hobbies: cleanField(byKey.hobbies),
     likes: cleanField(byKey.likes),
     goals: cleanField(byKey.goals),
+    images,
     applicantId,
     applicantMention: applicantId ? `<@${applicantId}>` : (embedAuthor || ''),
     logUrl: message.url || '',

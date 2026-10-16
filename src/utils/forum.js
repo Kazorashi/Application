@@ -6,15 +6,16 @@ function sanitizeThreadName(name) {
   return n.slice(0, 100);
 }
 
-// Plain-text post: OC name is the thread title; body = Name + categories,
-// each as "**Label**" line with the answer on the next line, blank line between.
-// No embed, no log link, no status wording. Age block only when parsed
-// (old submissions' form had no age question).
+// Plain-text post: OC name is the thread title; body = Name + MC Username +
+// categories, each as "**Label**" line with the answer on the next line,
+// blank line between. No embed, no log link, no status wording.
+// MC Username / Age blocks appear only when parsed (old forms lack them).
 function buildPostText(parsed) {
   const blocks = [
     ['Name', parsed.ocName],
-    ['Gender', parsed.gender],
   ];
+  if (parsed.mcUsername) blocks.push(['MC Username', parsed.mcUsername]);
+  blocks.push(['Gender', parsed.gender]);
   if (parsed.age) blocks.push(['Age', parsed.age]);
   blocks.push(
     ['Backstory', parsed.backstory],
@@ -74,6 +75,36 @@ async function findThreadByName(forum, ocName) {
   return matches[0] || null;
 }
 
+// Download log images (avatars, attachments, embed images) to re-upload them
+// on the forum post. Cap: 6 files, 10MB each. Failed downloads fall back to
+// plain URL lines appended to the post text so nothing is silently lost.
+async function fetchImageFiles(urls, maxFiles = 6, maxBytes = 10 * 1024 * 1024) {
+  const files = [];
+  const failed = [];
+  for (const url of (urls || []).slice(0, maxFiles * 2)) {
+    if (files.length >= maxFiles) break;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct && !ct.startsWith('image/')) throw new Error(`not image: ${ct}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length || buf.length > maxBytes) throw new Error(`bad size ${buf.length}`);
+      const m = url.split('?')[0].match(/\.([a-z0-9]{2,4})$/i);
+      files.push(new AttachmentBuilder(buf, { name: `image-${files.length + 1}.${m ? m[1].toLowerCase() : 'png'}` }));
+    } catch {
+      failed.push(url);
+    }
+  }
+  return { files, failed };
+}
+
+function withImageFallback(text, failed) {
+  if (!failed.length) return text;
+  let t = text + '\n\n' + failed.map((u) => `Image: ${u}`).join('\n');
+  if (t.length > 2000) t = t.slice(0, 1997) + '...';
+  return t;
+}
 // Returns { thread, created, edited }:
 //   created=true  -> new thread
 //   edited=true   -> same-name thread existed, its post was updated in place
@@ -94,17 +125,19 @@ async function postToForum(client, config, parsed) {
       return { thread: existing, created: false, edited: false };
     }
     if (starter) {
-      await starter.edit({ content: text });
+      const { files, failed } = await fetchImageFiles(parsed.images);
+      await starter.edit({ content: withImageFallback(text, failed), files });
       return { thread: existing, created: false, edited: true };
     }
     // Starter unavailable (deleted?) -> fall through and create a new one.
     console.warn(`[forum] thread ${existing.id} has no starter message; creating a new post`);
   }
 
+  const { files, failed } = await fetchImageFiles(parsed.images);
   const options = {
     name: sanitizeThreadName(parsed.ocName),
     autoArchiveDuration: 10080,
-    message: { content: text },
+    message: { content: withImageFallback(text, failed), files },
     reason: `Mirror Appy log ${parsed.logMessageId}`,
   };
   if (config.approvedTagId) options.appliedTags = [config.approvedTagId];
@@ -113,4 +146,4 @@ async function postToForum(client, config, parsed) {
   return { thread, created: true, edited: false };
 }
 
-module.exports = { buildPostText, findThreadByName, postToForum, sanitizeThreadName };
+module.exports = { buildPostText, findThreadByName, postToForum, sanitizeThreadName, fetchImageFiles };
