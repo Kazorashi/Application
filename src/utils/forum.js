@@ -10,6 +10,8 @@ function sanitizeThreadName(name) {
 // categories, each as "**Label**" line with the answer on the next line,
 // blank line between. No embed, no log link, no status wording.
 // MC Username / Age blocks appear only when parsed (old forms lack them).
+// Full text is NEVER truncated — overlong posts are split into follow-up
+// messages in the same thread by splitText() below.
 function buildPostText(parsed) {
   const blocks = [
     ['Name', parsed.ocName],
@@ -24,32 +26,64 @@ function buildPostText(parsed) {
     ['Life Goals', parsed.goals]
   );
   const mention = parsed.applicantMention ? parsed.applicantMention + '\n\n' : '';
+  return mention + blocks.map(([label, value]) => `**${label}**\n${value}`).join('\n\n');
+}
 
-  // Keep within Discord's 2000-char limit: structure (labels + blank lines)
-  // always intact; only the longest values get trimmed when overflowing.
-  const sep = '\n\n';
-  const overhead =
-    mention.length +
-    blocks.reduce((n, [label]) => n + label.length + 5, 0) + // `**label**\n`
-    sep.length * (blocks.length - 1);
-  const budget = 2000 - overhead - 1;
-
-  const values = blocks.map(([, v]) => v);
-  let sum = values.reduce((n, v) => n + v.length, 0);
-  while (sum > budget && budget > 0) {
-    let idx = 0;
-    for (let i = 1; i < values.length; i++) {
-      if (values[i].length > values[idx].length) idx = i;
+// Split text into <=limit chunks for Discord's 2000-char message limit.
+// Packs whole blank-line paragraphs greedily so "**Label**\nvalue" blocks
+// are never torn apart; only a single giant paragraph is hard-split.
+function splitText(text, limit = 2000) {
+  const paras = String(text || '').split('\n\n');
+  const chunks = [];
+  let cur = '';
+  const pushChunk = (s) => { if (s) chunks.push(s); };
+  for (const p of paras) {
+    if (!p) continue;
+    const add = cur ? '\n\n' + p : p;
+    if ((cur + add).length <= limit) {
+      cur += add;
+      continue;
     }
-    if (values[idx].length <= 1) break;
-    const take = Math.min(sum - budget, values[idx].length - 1);
-    values[idx] = values[idx].slice(0, values[idx].length - take);
-    sum -= take;
+    pushChunk(cur);
+    if (p.length <= limit) {
+      cur = p;
+      continue;
+    }
+    let rest = p;
+    while (rest.length > limit) {
+      chunks.push(rest.slice(0, limit));
+      rest = rest.slice(limit);
+    }
+    cur = rest;
   }
+  pushChunk(cur);
+  return chunks.length ? chunks : [''];
+}
 
-  let text = mention + blocks.map(([label], i) => `**${label}**\n${values[i]}`).join(sep);
-  if (text.length > 2000) text = text.slice(0, 1997) + '...';
-  return text;
+// Bot's own follow-up messages in a thread (starter excluded), oldest first.
+// Used to reconcile follow-ups when a same-name post is updated or shortened.
+async function getBotFollowUps(thread, starterId) {
+  const selfId = thread.client.user.id;
+  const msgs = await thread.messages.fetch({ limit: 100 });
+  return [...msgs.values()]
+    .filter((m) => m.author?.id === selfId && m.id !== starterId)
+    .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+}
+
+// Make the thread's follow-ups match chunks[1:]: edit in place, create
+// missing ones, delete surplus ones from a previously longer version.
+async function syncFollowUps(thread, starterId, restChunks) {
+  const followUps = await getBotFollowUps(thread, starterId);
+  for (let i = 0; i < restChunks.length; i++) {
+    if (followUps[i]) {
+      if (followUps[i].content !== restChunks[i]) await followUps[i].edit(restChunks[i]);
+    } else {
+      await thread.send(restChunks[i]);
+    }
+  }
+  for (let i = restChunks.length; i < followUps.length; i++) {
+    await followUps[i].delete().catch(() => null);
+  }
 }
 
 // Same-name rule: find the OLDEST thread with this OC name, active OR
@@ -105,45 +139,53 @@ function withImageFallback(text, failed) {
   if (t.length > 2000) t = t.slice(0, 1997) + '...';
   return t;
 }
-// Returns { thread, created, edited }:
+// Returns { thread, created, edited, parts }:
 //   created=true  -> new thread
 //   edited=true   -> same-name thread existed, its post was updated in place
 //   both false    -> same-name thread existed with identical content (no-op)
+// Long posts are split: chunk[0] is the starter, the rest are follow-up
+// messages in the same thread (posted/edited/deleted to match).
 async function postToForum(client, config, parsed) {
   const forum = await client.channels.fetch(config.forumChannelId);
   if (!forum || forum.type !== ChannelType.GuildForum) {
     throw new Error(`FORUM_CHANNEL_ID ${config.forumChannelId} is not a Forum channel (type=${forum?.type}).`);
   }
 
-  const text = buildPostText(parsed);
+  const { files, failed } = await fetchImageFiles(parsed.images);
+  const chunks = splitText(withImageFallback(buildPostText(parsed), failed));
+  const parts = chunks.length;
+
   const existing = await findThreadByName(forum, parsed.ocName);
   if (existing) {
     // Unarchive first — archived threads reject message edits.
     if (existing.archived) await existing.setArchived(false, `Re-activated by Appy log ${parsed.logMessageId}`);
     const starter = await existing.fetchStarterMessage().catch(() => null);
-    if (starter && starter.content === text) {
-      return { thread: existing, created: false, edited: false };
-    }
     if (starter) {
-      const { files, failed } = await fetchImageFiles(parsed.images);
-      await starter.edit({ content: withImageFallback(text, failed), files });
-      return { thread: existing, created: false, edited: true };
+      const followUps = await getBotFollowUps(existing, starter.id);
+      const same =
+        starter.content === chunks[0] &&
+        followUps.length === chunks.length - 1 &&
+        followUps.every((m, i) => m.content === chunks[i + 1]);
+      if (same) return { thread: existing, created: false, edited: false, parts };
+      await starter.edit({ content: chunks[0], files });
+      await syncFollowUps(existing, starter.id, chunks.slice(1));
+      return { thread: existing, created: false, edited: true, parts };
     }
     // Starter unavailable (deleted?) -> fall through and create a new one.
     console.warn(`[forum] thread ${existing.id} has no starter message; creating a new post`);
   }
 
-  const { files, failed } = await fetchImageFiles(parsed.images);
   const options = {
     name: sanitizeThreadName(parsed.ocName),
     autoArchiveDuration: 10080,
-    message: { content: withImageFallback(text, failed), files },
+    message: { content: chunks[0], files },
     reason: `Mirror Appy log ${parsed.logMessageId}`,
   };
   if (config.approvedTagId) options.appliedTags = [config.approvedTagId];
 
   const thread = await forum.threads.create(options);
-  return { thread, created: true, edited: false };
+  for (const chunk of chunks.slice(1)) await thread.send(chunk);
+  return { thread, created: true, edited: false, parts };
 }
 
-module.exports = { buildPostText, findThreadByName, postToForum, sanitizeThreadName, fetchImageFiles };
+module.exports = { buildPostText, splitText, findThreadByName, postToForum, sanitizeThreadName, fetchImageFiles };

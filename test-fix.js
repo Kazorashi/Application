@@ -1,6 +1,6 @@
 const { isApproved, wasApproved } = require('./src/utils/detect');
 const { parseApplication } = require('./src/utils/parse');
-const { buildPostText } = require('./src/utils/forum');
+const { buildPostText, splitText } = require('./src/utils/forum');
 
 const stats =
   'UserId: `709446568172060675`\nUsername: `saperan.`\nUser: <@709446568172060675>\nDuration: `49s`\nJoined guild <t:1772739205:R>\nSubmitted: <t:1790970191:R>';
@@ -139,10 +139,21 @@ check('post has no log link', !post.includes('discord.com') && !post.includes('L
 check('post has no "approved" wording', !/approv/i.test(post));
 check('post within 2000 chars', post.length <= 2000);
 
-// overflow safety: huge answers must still fit and keep structure
-const huge = buildPostText({ ...p, backstory: 'x'.repeat(900), hobbies: 'y'.repeat(900), likes: 'z'.repeat(900), goals: 'w'.repeat(900) });
-check('huge answers capped at 2000', huge.length <= 2000);
-check('huge still has all headers', ['**Gender**', '**Backstory**', '**Hobbies/Skills**', '**Likes/Dislikes**', '**Life Goals**'].every((l) => huge.includes(l)));
+// overflow: full text is never truncated, splitText() chunks it for follow-ups
+const hugePost = buildPostText({ ...p, backstory: 'x'.repeat(900), hobbies: 'y'.repeat(900), likes: 'z'.repeat(900), goals: 'w'.repeat(900) });
+check('huge answers fully preserved (no truncation)', hugePost.includes('x'.repeat(900)) && hugePost.includes('w'.repeat(900)));
+const hugeChunks = splitText(hugePost);
+check('huge splits into follow-up chunks', hugeChunks.length > 1 && hugeChunks.every((c) => c.length <= 2000));
+check('chunks rejoin to full text', hugeChunks.join('\n\n') === hugePost);
+check('splits between blocks, not inside', (() => {
+  const t = '**A**\n' + 'x'.repeat(1990) + '\n\n**B**\nshort';
+  const c = splitText(t);
+  return c.length === 2 && c[0].endsWith('xxx') && c[1] === '**B**\nshort';
+})());
+const pair = 'A'.repeat(1500) + '\n\n' + 'B'.repeat(1500);
+check('splits on blank lines', (() => { const c = splitText(pair); return c.length === 2 && c.join('\n\n') === pair; })());
+check('hard-splits giant paragraph', (() => { const c = splitText('X'.repeat(2500)); return c.length === 2 && c.every((x) => x.length <= 2000); })());
+check('short text stays one chunk', splitText('hello').length === 1);
 
 // store: claim / stale-claim recovery / persistence round-trip
 const store = require('./src/utils/store');

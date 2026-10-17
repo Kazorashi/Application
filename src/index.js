@@ -77,13 +77,14 @@ async function handleApproved(message, source) {
   // backfill can never both post the same application.
   store.mark(message.id, 'posting');
   try {
-    const { thread, created, edited } = await postToForum(client, config, parsed);
+    const { thread, created, edited, parts } = await postToForum(client, config, parsed);
     store.mark(message.id, thread.id);
     store.flush();
+    const suffix = parts > 1 ? ` (${parts} parts)` : '';
     if (created) {
-      console.log(`[posted] forum thread ${thread.id} (${thread.name}) for log ${message.id}`);
+      console.log(`[posted] forum thread ${thread.id} (${thread.name}) for log ${message.id}${suffix}`);
     } else if (edited) {
-      console.log(`[updated] same-name thread ${thread.id} (${thread.name}) edited in place for log ${message.id}`);
+      console.log(`[updated] same-name thread ${thread.id} (${thread.name}) edited in place for log ${message.id}${suffix}`);
     } else {
       console.log(`[deduped] identical forum post already existed (${thread.id}) for log ${message.id}`);
     }
